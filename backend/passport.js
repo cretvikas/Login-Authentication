@@ -17,13 +17,13 @@ async function getDB() {
 }
 
 // ─── Serialize / Deserialize (required for session support) ─
-// passport.serializeUser((user, done) => {
-//   done(null, user);
-// });
+passport.serializeUser((user, done) => {
+  done(null, user);
+});
 
-// passport.deserializeUser((user, done) => {
-//   done(null, user);
-// });
+passport.deserializeUser((user, done) => {
+  done(null, user);
+});
 
 // ─── Google Strategy ───────────────────────────────────────
 passport.use(new GoogleStrategy({
