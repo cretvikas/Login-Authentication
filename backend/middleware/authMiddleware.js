@@ -95,13 +95,10 @@ async function authMiddleware(req, res, next) {
       roles:  user.roles ?? [],
     });
 
-    // 9. Update the session with the new accessTokenId
-    const newJti = jwt.decode(newAccessToken)?.jti
-      ?? (user._id.toString() + Date.now());
-
+    // 9. Record that the session was refreshed
     await database.collection('sessions').updateOne(
       { _id: session._id },
-      { $set: { accessTokenId: newJti } }
+      { $set: { revokedAt: null } }   // ensure revokedAt stays null (schema field)
     );
 
     // 10. Set the refreshed token as an updated cookie

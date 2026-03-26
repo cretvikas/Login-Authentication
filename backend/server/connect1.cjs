@@ -1,8 +1,7 @@
 // ============================================================
-// db_init.js - Authentication Configuration System (G-20)
-// Indian Institute of Technology Hyderabad
-// Sprint-1 | Feb 2026
-// Run with: node db_init.js
+// connect1.cjs - Authentication DB Framework
+// Configurable multi-app auth system with per-URL audit logs
+// Run with: node connect1.cjs
 // ============================================================
 
 const { MongoClient } = require("mongodb");
@@ -49,115 +48,143 @@ async function initDB() {
     const db = client.db(DB_NAME);
 
     // ══════════════════════════════════════════════════════════
-    // 1. USERS
-    //    Core identity store. Supports MFA, roles, geo allowlist,
-    //    password history, and account lockout (FR-1, FR-5, FR-11,
-    //    FR-12–FR-16, FR-24).
+    // 1. APPLICATIONS
+    //    Each registered destination URL/app. Stores configurable
+    //    auth methods (local, OAuth2, SAML, OIDC), redirect URLs,
+    //    and per-provider OAuth credentials.
+    // ══════════════════════════════════════════════════════════
+    await createCollection(db, "applications", {
+      validator: {
+        $jsonSchema: {
+          bsonType: "object",
+          required: ["appName", "clientId", "destinationUrls", "enabledAuthMethods", "createdAt"],
+          properties: {
+            appName:      { bsonType: "string" },
+            clientId:     { bsonType: "string" },
+            clientSecret: { bsonType: "string" },
+            destinationUrls: {
+              bsonType: "object",
+              required: ["loginSuccess"],
+              properties: {
+                loginSuccess:  { bsonType: "string" },
+                loginFailure:  { bsonType: "string" },
+                logout:        { bsonType: "string" },
+                mfaChallenge:  { bsonType: "string" },
+                passwordReset: { bsonType: "string" },
+              },
+            },
+            enabledAuthMethods: {
+              bsonType: "array",
+              items: {
+                bsonType: "string",
+                enum: ["local", "oauth2", "saml2", "oidc"],
+              },
+            },
+            oauthConfig: {
+              bsonType: "object",
+              additionalProperties: true,
+            },
+            isActive:   { bsonType: "bool" },
+            createdAt:  { bsonType: "date" },
+            updatedAt:  { bsonType: "date" },
+          },
+        },
+      },
+    });
+
+    await createIndexes(db, "applications", [
+      [{ clientId: 1 },    { unique: true }],
+      [{ appName: 1 },     { unique: true }],
+      [{ isActive: 1 },    {}],
+    ]);
+
+    // ══════════════════════════════════════════════════════════
+    // 2. USERS
+    //    Global user identity store. One user can log into
+    //    multiple apps. Stores credentials, MFA config, linked
+    //    OAuth providers, lockout state, and password policy.
     // ══════════════════════════════════════════════════════════
     await createCollection(db, "users", {
       validator: {
         $jsonSchema: {
           bsonType: "object",
-          required: ["email", "passwordHash", "createdAt"],
+          required: ["email", "createdAt"],
           properties: {
             email: {
               bsonType: "string",
               pattern: "^.+@.+\\..+$",
-              description: "User email address - required, unique",
             },
-            passwordHash: {
-              bsonType: "string",
-              description: "bcrypt / argon2 hash of the password",
-            },
+            displayName:    { bsonType: "string" },
+            phone:          { bsonType: ["string", "null"] },
+            avatarUrl:      { bsonType: ["string", "null"] },
+            passwordHash:   { bsonType: ["string", "null"] },
             passwordHistory: {
               bsonType: "array",
-              description: "Array of previous password hashes (FR-15)",
               items: { bsonType: "string" },
             },
-            mfaEnabled: {
-              bsonType: "bool",
-              description: "Whether MFA is active for this user",
-            },
-            mfaSecret: {
-              bsonType: ["string", "null"],
-              description: "TOTP secret key (FR-7)",
-            },
+            passwordExpiresAt: { bsonType: ["date", "null"] },
+            mfaEnabled:     { bsonType: "bool" },
+            mfaSecret:      { bsonType: ["string", "null"] },
             mfaMethods: {
               bsonType: "array",
-              description: "Enrolled MFA methods: TOTP | SMS | EMAIL (FR-7–9)",
               items: {
                 bsonType: "string",
                 enum: ["TOTP", "SMS", "EMAIL"],
               },
             },
-            passwordExpiresAt: {
-              bsonType: ["date", "null"],
-              description: "Password expiry timestamp (FR-16)",
-            },
-            accountLocked: {
-              bsonType: "bool",
-              description: "Account lockout flag (FR-5)",
-            },
-            failedLoginAttempts: {
-              bsonType: "number",
-              description: "Consecutive failed login count (FR-5)",
-            },
-            lockoutUntil: {
-              bsonType: ["date", "null"],
-              description: "Temporary lockout expiry timestamp",
-            },
-            allowedCountries: {
+            linkedProviders: {
               bsonType: "array",
-              description: "Per-user geo allowlist (FR-24)",
-              items: { bsonType: "string" },
+              items: {
+                bsonType: "object",
+                required: ["provider", "providerId"],
+                properties: {
+                  provider:      { bsonType: "string" },
+                  providerId:    { bsonType: "string" },
+                  providerEmail: { bsonType: "string" },
+                },
+              },
             },
+            accountLocked:       { bsonType: "bool" },
+            failedLoginAttempts: { bsonType: "number" },
+            lockoutUntil:        { bsonType: ["date", "null"] },
             roles: {
               bsonType: "array",
-              description: "Assigned roles: admin | end_user | auditor | integrator",
               items: {
                 bsonType: "string",
                 enum: ["admin", "end_user", "auditor", "integrator"],
               },
             },
-            providerType: {
-              bsonType: "string",
-              enum: ["local", "oauth2", "saml2", "oidc"],
-              description: "Identity provider type (FR-2–4)",
-            },
-            providerId: {
-              bsonType: ["string", "null"],
-              description: "External provider subject/ID",
-            },
-            createdAt:  { bsonType: "date" },
-            updatedAt:  { bsonType: "date" },
-            lastLoginAt: { bsonType: ["date", "null"] },
+            createdAt:    { bsonType: "date" },
+            updatedAt:    { bsonType: "date" },
+            lastLoginAt:  { bsonType: ["date", "null"] },
           },
         },
       },
     });
 
     await createIndexes(db, "users", [
-      [{ email: 1 },                    { unique: true }],
-      [{ accountLocked: 1 },            {}],
-      [{ roles: 1 },                    {}],
-      [{ providerId: 1, providerType: 1 }, { sparse: true }],
+      [{ email: 1 },                                        { unique: true }],
+      [{ "linkedProviders.provider": 1, "linkedProviders.providerId": 1 }, { sparse: true }],
+      [{ accountLocked: 1 },                                {}],
+      [{ roles: 1 },                                        {}],
     ]);
 
     // ══════════════════════════════════════════════════════════
-    // 2. SESSIONS
-    //    JWT access + refresh token lifecycle. Tracks device,
-    //    IP, and geo per session (FR-18–23).
+    // 3. SESSIONS
+    //    Per-app login sessions. Tracks which app the user
+    //    logged into and which auth method was used.
     // ══════════════════════════════════════════════════════════
     await createCollection(db, "sessions", {
       validator: {
         $jsonSchema: {
           bsonType: "object",
-          required: ["userId", "accessTokenId", "createdAt", "expiresAt"],
+          required: ["userId", "appId", "authMethod", "createdAt", "expiresAt"],
           properties: {
-            userId:        { bsonType: "objectId" },
-            accessTokenId: { bsonType: "string", description: "JWT jti claim" },
-            refreshToken:  { bsonType: "string" },
-            ipAddress:     { bsonType: "string" },
+            userId:       { bsonType: "objectId" },
+            appId:        { bsonType: "objectId" },
+            authMethod:   { bsonType: "string" },
+            refreshToken: { bsonType: "string" },
+            ipAddress:    { bsonType: "string" },
             geoLocation: {
               bsonType: "object",
               properties: {
@@ -168,172 +195,121 @@ async function initDB() {
                 longitude: { bsonType: "double" },
               },
             },
-            deviceInfo:  { bsonType: "string" },
-            userAgent:   { bsonType: "string" },
-            isRevoked:   { bsonType: "bool" },
-            revokedAt:   { bsonType: ["date", "null"] },
-            createdAt:   { bsonType: "date" },
-            expiresAt:   { bsonType: "date" },
+            deviceInfo: { bsonType: "string" },
+            userAgent:  { bsonType: "string" },
+            isRevoked:  { bsonType: "bool" },
+            revokedAt:  { bsonType: ["date", "null"] },
+            createdAt:  { bsonType: "date" },
+            expiresAt:  { bsonType: "date" },
           },
         },
       },
     });
 
     await createIndexes(db, "sessions", [
-      [{ expiresAt: 1 },        { expireAfterSeconds: 0 }],  // TTL auto-delete
-      [{ userId: 1 },           {}],
-      [{ accessTokenId: 1 },    { unique: true }],
-      [{ isRevoked: 1 },        {}],
-      [{ ipAddress: 1 },        {}],
+      [{ expiresAt: 1 },             { expireAfterSeconds: 0 }],
+      [{ userId: 1, appId: 1 },      {}],
+      [{ appId: 1 },                  {}],
+      [{ isRevoked: 1 },             {}],
+      [{ ipAddress: 1 },             {}],
     ]);
 
     // ══════════════════════════════════════════════════════════
-    // 3. AUDIT LOGS
-    //    Immutable append-only log of all security events.
-    //    Capped collection enforces immutability (FR-34–39).
+    // 4. AUDIT LOGS
+    //    Per-app security event log. Every event is tagged with
+    //    appId so you can query logs for a specific URL/app.
+    //    Capped collection for immutability.
     // ══════════════════════════════════════════════════════════
     await createCollection(db, "auditLogs", {
       capped: true,
-      size: 5 * 1024 * 1024 * 1024,  // 5 GB
-      max:  5_000_000,                 // 5M documents max
+      size: 5 * 1024 * 1024 * 1024,
+      max:  5_000_000,
       validator: {
         $jsonSchema: {
           bsonType: "object",
-          required: ["eventType", "timestamp"],
+          required: ["appId", "eventType", "timestamp"],
           properties: {
-            userId:    { bsonType: ["objectId", "null"] },
+            appId:    { bsonType: "objectId" },
+            userId:   { bsonType: ["objectId", "null"] },
             eventType: {
               bsonType: "string",
               enum: [
-                // Auth events (FR-34)
                 "LOGIN_SUCCESS",
                 "LOGIN_FAILURE",
                 "LOGOUT",
-                // Token events (FR-35)
                 "TOKEN_ISSUED",
                 "TOKEN_REVOKED",
                 "TOKEN_REFRESHED",
-                // MFA events
+                "OAUTH_CALLBACK",
+                "OAUTH_LINK",
+                "OAUTH_UNLINK",
                 "MFA_SUCCESS",
                 "MFA_FAILURE",
                 "MFA_ENROLLED",
                 "MFA_REMOVED",
-                // Account events
                 "PASSWORD_RESET",
                 "PASSWORD_CHANGED",
                 "ACCOUNT_LOCKED",
                 "ACCOUNT_UNLOCKED",
-                "STEP_UP_AUTH",
-                // Security events (FR-36, FR-37)
-                "IP_BANNED",
-                "IP_WHITELISTED",
-                "GEO_BLOCKED",
-                "IMPOSSIBLE_TRAVEL",
-                "SUSPICIOUS_IP",
               ],
             },
-            ipAddress:   { bsonType: "string" },
-            geoLocation: { bsonType: "object" },
-            riskScore:   { bsonType: "double" },
-            userAgent:   { bsonType: "string" },
-            metadata:    { bsonType: "object" },
-            timestamp:   { bsonType: "date" },
+            authMethod: { bsonType: "string" },
+            ipAddress:  { bsonType: "string" },
+            geoLocation: {
+              bsonType: "object",
+              properties: {
+                country: { bsonType: "string" },
+                region:  { bsonType: "string" },
+                city:    { bsonType: "string" },
+              },
+            },
+            userAgent: { bsonType: "string" },
+            metadata:  { bsonType: "object" },
+            timestamp: { bsonType: "date" },
           },
         },
       },
     });
 
     await createIndexes(db, "auditLogs", [
-      [{ userId: 1, timestamp: -1 },    {}],
-      [{ eventType: 1, timestamp: -1 }, {}],
-      [{ ipAddress: 1 },                {}],
-      [{ riskScore: -1 },               {}],
+      [{ appId: 1, timestamp: -1 },      {}],
+      [{ appId: 1, eventType: 1 },        {}],
+      [{ userId: 1, timestamp: -1 },      {}],
+      [{ ipAddress: 1 },                  {}],
     ]);
 
     // ══════════════════════════════════════════════════════════
-    // 4. OTP
-    //    Short-lived codes for SMS / Email / TOTP flows.
-    //    TTL index auto-expires used or stale codes (FR-7–9).
+    // 5. OTPs
+    //    Short-lived verification codes for SMS / Email / TOTP.
+    //    TTL index auto-expires stale codes.
     // ══════════════════════════════════════════════════════════
     await createCollection(db, "otps", {
       validator: {
         $jsonSchema: {
           bsonType: "object",
-          required: ["userId", "otpCode", "otpType", "expiryTime"],
+          required: ["userId", "appId", "otpCode", "otpType", "expiryTime"],
           properties: {
-            userId:    { bsonType: "objectId" },
-            otpCode:   { bsonType: "string" },
-            otpType:   { bsonType: "string", enum: ["SMS", "EMAIL", "TOTP"] },
+            userId:     { bsonType: "objectId" },
+            appId:      { bsonType: "objectId" },
+            otpCode:    { bsonType: "string" },
+            otpType: {
+              bsonType: "string",
+              enum: ["SMS", "EMAIL", "TOTP"],
+            },
             expiryTime: { bsonType: "date" },
-            isUsed:    { bsonType: "bool" },
-            attempts:  { bsonType: "number", description: "Verification attempt count" },
-            createdAt: { bsonType: "date" },
+            isUsed:     { bsonType: "bool" },
+            attempts:   { bsonType: "number" },
+            createdAt:  { bsonType: "date" },
           },
         },
       },
     });
 
     await createIndexes(db, "otps", [
-      [{ expiryTime: 1 }, { expireAfterSeconds: 0 }],  // TTL auto-delete
-      [{ userId: 1 },     {}],
-      [{ isUsed: 1 },     {}],
-    ]);
-
-    // ══════════════════════════════════════════════════════════
-    // 5. IP RULES  (IP Shield Module)
-    //    Whitelist / blacklist by IP or CIDR range.
-    //    Supports temporary bans after threshold (FR-29–33).
-    // ══════════════════════════════════════════════════════════
-    await createCollection(db, "ipRules", {
-      validator: {
-        $jsonSchema: {
-          bsonType: "object",
-          required: ["ipRange", "ruleType", "createdAt"],
-          properties: {
-            ipRange:   { bsonType: "string", description: "Single IP or CIDR e.g. 192.168.1.0/24" },
-            ruleType:  { bsonType: "string", enum: ["WHITELIST", "BLACKLIST", "TEMP_BAN"] },
-            reason:    { bsonType: "string" },
-            hitCount:  { bsonType: "number", description: "Rate-limit hit counter (FR-31)" },
-            expiresAt: { bsonType: ["date", "null"], description: "Temp ban expiry (FR-33)" },
-            createdAt: { bsonType: "date" },
-            createdBy: { bsonType: ["objectId", "null"] },
-          },
-        },
-      },
-    });
-
-    await createIndexes(db, "ipRules", [
-      [{ ipRange: 1 },              { unique: true }],
-      [{ ruleType: 1 },             {}],
-      [{ expiresAt: 1 },            { expireAfterSeconds: 0, sparse: true }], // TTL for temp bans
-    ]);
-
-    // ══════════════════════════════════════════════════════════
-    // 6. GEO RULES  (Geo Shield Module)
-    //    Country / region level allow, block, or step-up MFA
-    //    rules. Also stores impossible travel events (FR-24–28).
-    // ══════════════════════════════════════════════════════════
-    await createCollection(db, "geoRules", {
-      validator: {
-        $jsonSchema: {
-          bsonType: "object",
-          required: ["ruleType", "createdAt"],
-          properties: {
-            country:   { bsonType: "string", description: "ISO 3166-1 alpha-2 country code" },
-            region:    { bsonType: "string" },
-            ruleType:  { bsonType: "string", enum: ["ALLOW", "BLOCK", "STEP_UP_MFA"] },
-            riskScore: { bsonType: "double", description: "0.0 – 1.0 risk weight (FR-28)" },
-            createdAt: { bsonType: "date" },
-            createdBy: { bsonType: ["objectId", "null"] },
-          },
-        },
-      },
-    });
-
-    await createIndexes(db, "geoRules", [
-      [{ country: 1, region: 1 }, { unique: true, sparse: true }],
-      [{ ruleType: 1 },           {}],
-      [{ riskScore: -1 },         {}],
+      [{ expiryTime: 1 },    { expireAfterSeconds: 0 }],
+      [{ userId: 1 },        {}],
+      [{ appId: 1 },         {}],
+      [{ isUsed: 1 },        {}],
     ]);
 
     // ══════════════════════════════════════════════════════════

@@ -30,18 +30,19 @@ router.get('/google/callback',
     try {
       const { accessToken, refreshToken } = generateTokens(req.user);
 
-      // Save refreshToken to your sessions collection (from db_init.js)
+      // Save session to match the sessions schema in connect1.cjs
       const db = await getDB();
       await db.collection('sessions').insertOne({
-        userId:        new ObjectId(req.user.userId),
-        accessTokenId: getJtiFromToken(accessToken),
-        refreshToken:  refreshToken,
-        ipAddress:     req.ip,
-        deviceInfo:    req.headers['user-agent'],
-        userAgent:     req.headers['user-agent'],
-        isRevoked:     false,
-        createdAt:     new Date(),
-        expiresAt:     new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
+        userId:       new ObjectId(req.user.userId),
+        appId:        new ObjectId(req.query.appId || req.headers['x-app-id']),  // required by schema
+        authMethod:   'oauth2',                      // required by schema — Google OAuth
+        refreshToken: refreshToken,
+        ipAddress:    req.ip,
+        deviceInfo:   req.headers['user-agent'],
+        userAgent:    req.headers['user-agent'],
+        isRevoked:    false,
+        createdAt:    new Date(),
+        expiresAt:    new Date(Date.now() + 7 * 24 * 60 * 60 * 1000), // 7 days
       });
 
       // Encode the access token in Base64 and set it as an HTTP-only cookie
@@ -62,11 +63,5 @@ router.get('/google/callback',
     }
   }
 );
-
-// Helper — extract jti from token
-function getJtiFromToken(token) {
-  const decoded = jwt.decode(token);
-  return decoded.jti ?? decoded.userId + Date.now(); // fallback if no jti
-}
 
 module.exports = router;
