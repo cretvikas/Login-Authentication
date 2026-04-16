@@ -272,19 +272,154 @@ export default function Login({ setUser }) {
   const [remember, setRemember] = useState(false);
   const [error, setError] = useState("");
 
-  const [showOtherOptions, setShowOtherOptions] = useState(false);
+  // MFA state
+  const [mfaRequired, setMfaRequired] = useState(false);
+  const [mfaUserId, setMfaUserId] = useState(null);
+  const [otpCode, setOtpCode] = useState("");
 
-  const handleLogin = (e) => {
+  const handleLogin = async (e) => {
     e.preventDefault();
     setError("");
     if (!username.trim() || !password) {
       setError("Please enter both username and password.");
       return;
     }
-    // TODO: Replace with real auth logic
-    setUser({ username });
+
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const clientId = params.get("clientId");
+
+      const res = await fetch("http://localhost:5000/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ email: username, password, clientId }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.error || "Login failed.");
+        return;
+      }
+
+      // If MFA is required, switch to OTP screen
+      if (data.mfaRequired) {
+        setMfaRequired(true);
+        setMfaUserId(data.userId);
+        return;
+      }
+
+      setUser(data.user);
+    } catch (err) {
+      setError("Unable to connect to server.");
+    }
   };
 
+  const handleVerifyOtp = async (e) => {
+    e.preventDefault();
+    setError("");
+    if (!otpCode.trim()) {
+      setError("Please enter the verification code.");
+      return;
+    }
+
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const clientId = params.get("clientId");
+
+      const res = await fetch("http://localhost:5000/auth/verify-otp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ userId: mfaUserId, otpCode, clientId }),
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.error || "Verification failed.");
+        return;
+      }
+
+      setUser(data.user);
+      if (data.redirectUrl) {
+        window.location.href = data.redirectUrl;
+      }
+    } catch (err) {
+      setError("Unable to connect to server.");
+    }
+  };
+
+  // ── OTP Verification Screen ──────────────────────────────────
+  if (mfaRequired) {
+    return (
+      <>
+        <style>{styles}</style>
+        <div className="login-root">
+          <div className="orb-a" />
+          <div className="orb-b" />
+
+          <div className="card">
+            <div className="card-topline" />
+
+            <div className="logo">🔐</div>
+            <h1>Verify Your Identity</h1>
+            <p className="subtitle">
+              We've sent a 6-digit code to your email. Enter it below.
+            </p>
+
+            {error && <div className="error-msg">{error}</div>}
+
+            <div className="field">
+              <label htmlFor="otp-code">Verification Code</label>
+              <div className="input-wrap">
+                <input
+                  id="otp-code"
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={6}
+                  placeholder="000000"
+                  autoComplete="one-time-code"
+                  value={otpCode}
+                  onChange={(e) =>
+                    setOtpCode(e.target.value.replace(/\D/g, "").slice(0, 6))
+                  }
+                  onKeyDown={(e) => e.key === "Enter" && handleVerifyOtp(e)}
+                  style={{ letterSpacing: "8px", textAlign: "center", paddingLeft: "14px", fontSize: "22px" }}
+                />
+                <span className="input-icon">
+                  <svg width="16" height="16" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="1.8">
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/>
+                  </svg>
+                </span>
+              </div>
+            </div>
+
+            <button className="btn" onClick={handleVerifyOtp} style={{ marginTop: "12px" }}>
+              <div className="btn-inner">
+                <span>Verify & Sign In</span>
+                <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2">
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7"/>
+                </svg>
+              </div>
+            </button>
+
+            <p className="footer-note" style={{ marginTop: "20px" }}>
+              <button
+                style={{ background: "none", border: "none", color: "#c8a96e", cursor: "pointer", fontFamily: "'DM Sans', sans-serif", fontSize: "13px" }}
+                onClick={() => { setMfaRequired(false); setOtpCode(""); setError(""); }}
+              >
+                ← Back to Sign In
+              </button>
+            </p>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  // ── Password Login Screen ────────────────────────────────────
   return (
     <>
       <style>{styles}</style>
@@ -377,7 +512,13 @@ export default function Login({ setUser }) {
             <button 
 
             style={{background:"none",border:"none",color:"#c8a96e",cursor:"pointer"}}
-            onClick={() => {window.location.href = 'http://localhost:5000/auth/google';}}
+            onClick={() => {
+              const params = new URLSearchParams(window.location.search);
+              const clientId = params.get("clientId");
+              const url = new URL('http://localhost:5000/auth/google');
+              if (clientId) url.searchParams.append('clientId', clientId);
+              window.location.href = url.toString();
+            }}
             >
                 Sign in with other options
             </button>

@@ -7,7 +7,6 @@
 const { MongoClient } = require("mongodb");
 require("dotenv").config({ path: "./config.env" });
 
-const MONGO_URI = process.env.ATLAS_PASS;
 const DB_NAME   = "AuthenticationConfig";
 
 // ─── Helpers ─────────────────────────────────────────────────
@@ -33,8 +32,14 @@ async function createIndexes(db, name, indexes) {
 
 // ─── Main ─────────────────────────────────────────────────────
 async function initDB() {
+  // Load vault secrets
+  const { loadSecrets } = require("../utils/vault.js");
+  await loadSecrets();
+
+  const MONGO_URI = process.env.ATLAS_PASS;
+
   if (!MONGO_URI) {
-    console.error("❌ ATLAS_PASS not found in config.env");
+    console.error("❌ ATLAS_PASS not found via standard env or Vault");
     process.exit(1);
   }
 
@@ -178,10 +183,10 @@ async function initDB() {
       validator: {
         $jsonSchema: {
           bsonType: "object",
-          required: ["userId", "appId", "authMethod", "createdAt", "expiresAt"],
+          required: ["userId", "authMethod", "createdAt", "expiresAt"],
           properties: {
             userId:       { bsonType: "objectId" },
-            appId:        { bsonType: "objectId" },
+            appId:        { bsonType: ["objectId", "null"] },
             authMethod:   { bsonType: "string" },
             refreshToken: { bsonType: "string" },
             ipAddress:    { bsonType: "string" },
@@ -287,10 +292,10 @@ async function initDB() {
       validator: {
         $jsonSchema: {
           bsonType: "object",
-          required: ["userId", "appId", "otpCode", "otpType", "expiryTime"],
+          required: ["userId", "otpCode", "otpType", "expiryTime"],
           properties: {
             userId:     { bsonType: "objectId" },
-            appId:      { bsonType: "objectId" },
+            appId:      { bsonType: ["objectId", "null"] },
             otpCode:    { bsonType: "string" },
             otpType: {
               bsonType: "string",
