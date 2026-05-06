@@ -35,6 +35,24 @@ async function resolveApplication(identifier) {
   return await database.collection('applications').findOne(query);
 }
 
+// ─── Public app config (safe — no secrets) ────────────────────
+// Returns only the enabled auth methods for a given clientId.
+// Used by the frontend to conditionally render login options.
+router.get('/app-config', async (req, res) => {
+  const identifier = req.query.clientId;
+  if (!identifier) {
+    return res.status(400).json({ error: 'clientId query param is required.' });
+  }
+  const appDoc = await resolveApplication(identifier);
+  if (!appDoc) {
+    return res.status(404).json({ error: 'Application not found.' });
+  }
+  res.json({
+    appName:            appDoc.appName,
+    enabledAuthMethods: appDoc.enabledAuthMethods ?? [],
+  });
+});
+
 // ─── Audit log helper ─────────────────────────────────────────
 // Writes a document to the auditLogs collection matching the
 // schema defined in connect1.cjs (appId + eventType + timestamp required).
@@ -73,6 +91,12 @@ router.post('/login', async (req, res) => {
     if (!appDoc) {
       return res.status(400).json({ error: 'Invalid or missing Client ID.' });
     }
+
+    // ── Method enforcement ─────────────────────────────────────
+    if (!appDoc.enabledAuthMethods?.includes('local')) {
+      return res.status(403).json({ error: 'Local login is not enabled for this application.' });
+    }
+
     const resolvedAppId = appDoc._id.toString();
 
     const database = await getDB();
@@ -345,7 +369,20 @@ router.post('/verify-otp', async (req, res) => {
 });
 
 // ─── Step 1 — redirect to Google ───────────────────────────────
-router.get('/google', (req, res, next) => {
+router.get('/google', async (req, res, next) => {
+  const identifier = req.query.clientId || req.query.appId || req.headers['x-client-id'];
+
+  // Resolve app and enforce oauth2 method
+  if (identifier) {
+    const appDoc = await resolveApplication(identifier);
+    if (!appDoc) {
+      return res.status(400).json({ error: 'Invalid or missing Client ID.' });
+    }
+    if (!appDoc.enabledAuthMethods?.includes('oauth2')) {
+      return res.status(403).json({ error: 'SSO login is not enabled for this application.' });
+    }
+  }
+
   const options = { scope: ['profile', 'email'], session: false };
   if (req.query.clientId) {
     options.state = req.query.clientId;
