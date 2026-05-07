@@ -17,6 +17,8 @@
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "express-session": "^1.18.0",
+    "geoip-lite": "^1.4.10",
+    "ip": "^2.0.1",
     "jsonwebtoken": "^9.0.3",
     "mongodb": "^7.1.0",
     "node-vault": "^0.12.0",
