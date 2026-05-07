@@ -15,7 +15,7 @@
 7. [API Reference](#7-api-reference)
 8. [Authentication Flows](#8-authentication-flows)
 9. [Token Strategy](#9-token-strategy)
-10. [IP Whitelisting](#10-ip-whitelisting)
+10. [IP Whitelisting & Geo-Shielding](#10-ip-whitelisting--geo-shielding)
 11. [Frontend Integration](#11-frontend-integration)
 12. [Running the System](#12-running-the-system)
 13. [Security Notes](#13-security-notes)
@@ -303,7 +303,9 @@ Returns the enabled auth methods for a given application. Called by the frontend
 
 ### `POST /auth/login`
 
-**Step 1 of local login.** Validates email + password, generates a 6-digit OTP, and emails it. Does **not** issue tokens yet.
+**Step 1 of local login.** Validates email + password. 
+- If the user's IP is located in **Hyderabad**, it bypasses MFA (Geo-Shielding) and issues tokens immediately.
+- For all other locations, it generates a 6-digit OTP, emails it, and does **not** issue tokens yet.
 
 **Request body:**
 ```json
@@ -316,12 +318,26 @@ Returns the enabled auth methods for a given application. Called by the frontend
 
 > `clientId` can also be sent as header `x-client-id`.
 
-**Response 200:**
+**Response 200 (Non-Hyderabad User - MFA Required):**
 ```json
 {
   "mfaRequired": true,
   "userId": "<mongo-user-id>",
   "message": "OTP sent to your email. Please verify to complete login."
+}
+```
+
+**Response 200 (Hyderabad User - Direct Login):**
+```json
+{
+  "message": "Login successful",
+  "user": {
+    "userId": "...",
+    "email": "user@example.com",
+    "roles": ["end_user"]
+  },
+  "redirectUrl": "http://localhost:3000/dashboard",
+  "otpSkipped": true
 }
 ```
 
@@ -430,10 +446,12 @@ Browser                Backend              MongoDB          Gmail
   │   {email, password,    │─ find user ───────►│               │
   │    clientId}           │◄──────────────────│               │
   │                        │─ bcrypt.compare()  │               │
+  │                        │─ geo-shield check  │               │
   │                        │─ generate OTP ────►│ insert otps   │
   │                        │─ sendEmail ────────┼───────────────►│
   │◄─ {mfaRequired:true,   │                    │               │
   │    userId}             │                    │               │
+  │   (or tokens if skipped)                    │               │
   │                        │                    │               │
   │─ POST /auth/verify-otp►│                    │               │
   │   {userId, otpCode,    │─ hash+find OTP ───►│               │
@@ -502,7 +520,7 @@ app.get('/your-protected-route', authMiddleware, (req, res) => {
 
 ---
 
-## 10. IP Whitelisting
+## 10. IP Whitelisting & Geo-Shielding
 
 Non-`end_user` roles (admin, auditor, integrator) are **blocked** unless their IP falls within the configured CIDR ranges. **Change the ALLOWED_IP_RANGES with allowed IP ranges of IITH** 
 
@@ -527,6 +545,15 @@ const ALLOWED_IP_RANGES = [
 | `integrator` | ❌ Must be in whitelist |
 
 IP enforcement runs at the end of both `/auth/verify-otp` and the Google OAuth callback.
+
+### Geo-Shielding (Location-Based MFA Bypass)
+
+The system includes a smart location-based feature using `geoip-lite` and coordinate distance checking. If a user attempts to login locally and their IP address resolves to within a configured radius of **Hyderabad** (default 40km), the system automatically:
+- Skips the Email OTP requirement.
+- Issues tokens immediately, providing a seamless "direct login" experience.
+- Logs a `LOGIN_SUCCESS` audit event with `otpSkipped: true`.
+
+Users logging in from any other city will still require the 6-digit OTP to complete their login.
 
 ---
 
